@@ -1,0 +1,2 @@
+folder: result
+command: python main.py hepmass_not1000 true 8 1st

@@ -1,0 +1,2 @@
+folder: result
+command: python main.py churn true 4 1st all

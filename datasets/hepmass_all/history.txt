@@ -1,0 +1,2 @@
+folder: result
+command: python main.py hepmass_all true 8 1st all

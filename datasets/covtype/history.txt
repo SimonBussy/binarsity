@@ -1,0 +1,2 @@
+folder: result
+command: python main.py covtype false 8 1st all
