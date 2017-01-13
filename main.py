@@ -406,6 +406,7 @@ def run_models(model_):
         tmp = 0
         for i, C_ in enumerate(reversed(C_grid)):
             for j, n_cuts_ in enumerate(n_cuts_grid):
+                
                 tmp += 1
                 print("CV %s: %d%%" % (
                     model, tmp * 100 / (C_grid_size * n_cuts_grid_size)))
@@ -479,6 +480,20 @@ def run_models(model_):
 
         coeffs = learner.coef_
         np.save('./results/beta/5-%s' % model, coeffs)
+
+    if model_ == 'svm_rbf':
+
+        svc = svm.SVC()
+        # C_range = np.logspace(-2, 10, 13)
+        # gamma_range = np.logspace(-9, 3, 13)
+        #
+        # scores = list()
+        # scores_std = list()
+        # for C in C_s:
+        #     svc.C = C
+        #     this_scores = cross_val_score(svc, X, y, n_jobs=1)
+        #     scores.append(np.mean(this_scores))
+        #     scores_std.append(np.std(this_scores))
 
     return result
 
