@@ -1,2 +1,0 @@
-folder: result
-command: python main.py adult false 8 1st all
