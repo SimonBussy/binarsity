@@ -1,2 +1,0 @@
-folder: result
-command: python main.py susy true 8 min all
