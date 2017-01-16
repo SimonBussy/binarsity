@@ -18,11 +18,15 @@ from mlpp.inference import LearnerLogReg
 from mlpp.preprocessing import FeaturesBinarizer
 from sklearn.grid_search import GridSearchCV, RandomizedSearchCV
 from sklearn.utils.validation import indexable
-from sklearn.model_selection import check_cv
+from sklearn.model_selection import check_cv, cross_val_score, \
+    StratifiedShuffleSplit
 from sklearn.metrics.scorer import check_scoring
 from sklearn.model_selection._validation import _fit_and_score
 from sklearn.externals.joblib import Parallel, delayed
-import multiprocessing as mp
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier, \
+    GradientBoostingClassifier as GradientBoosting
+from scipy.stats import randint
 
 # get command-line arguments
 if len(argv) > 4:
@@ -76,8 +80,8 @@ else:
                      len(argv) - 1)
 
 
-def cross_val_score(estimators, X, y=None, groups=None, scoring=None,
-                    cv=None, n_jobs=1, verbose=0, fit_params=None):
+def cross_val_score_(estimators, X, y=None, groups=None, scoring=None,
+                     cv=None, n_jobs=1, verbose=0, fit_params=None):
     X, y, groups = indexable(X, y, groups)
     cv = check_cv(cv, y, classifier=True)
     cv_iter = list(cv.split(X, y, groups))
@@ -95,9 +99,9 @@ def cross_val_score(estimators, X, y=None, groups=None, scoring=None,
 
 
 def compute_score(clf, X, y, K, verbose=True, fit_params=None):
-    scores = cross_val_score(clf, X, y, cv=K, verbose=0,
-                             n_jobs=1, scoring="roc_auc",
-                             fit_params=fit_params)
+    scores = cross_val_score_(clf, X, y, cv=K, verbose=0,
+                              n_jobs=1, scoring="roc_auc",
+                              fit_params=fit_params)
     score_mean = scores.mean()
     score_std = 2 * scores.std()
     if verbose:
@@ -140,12 +144,30 @@ X, X_test, y, y_test = train_test_split(
 
 del df
 
-if test:
-    n_restrict = 5000
-    X = np.array(X)[:n_restrict, :]
+# speedup restrictions
+n_restrict = 20000  # use only 20k examples max for Cross-Val
+X_cv = pd.DataFrame()
+y_cv = pd.DataFrame()
+if len(y) > n_restrict:
+    X_cv = X.iloc[:n_restrict, :]
+    y_cv = y[:n_restrict]
+else:
+    X_cv = X
+    y_cv = y
+
+n_restrict = 100000  # no more than 100k examples for training after CV
+if len(y) > n_restrict:
+    X = X.iloc[:n_restrict, :]
     y = y[:n_restrict]
-    X_test = np.array(X_test)[:n_restrict, :]
-    y_test = y_test[:n_restrict]
+
+n_test = 300
+if test and len(y) > n_test:
+    X = X.iloc[:n_test, :]
+    y = y[:n_test]
+    X_cv = X_cv.iloc[:n_test, :]
+    y_cv = y_cv[:n_test]
+    X_test = X_test.iloc[:n_test, :]
+    y_test = y_test[:n_test]
 
 print("Training:")
 print(X.shape)
@@ -155,6 +177,7 @@ print(X_test.shape)
 # Center and reduce data
 standardscaler = StandardScaler()
 X_std = standardscaler.fit_transform(X)
+X_std_cv = standardscaler.fit_transform(X_cv)
 X_test_std = standardscaler.transform(X_test)
 print("data centered and reduced")
 
@@ -164,9 +187,12 @@ os.makedirs('./results/y_pred')
 os.makedirs('./results/beta')
 os.makedirs('./results/cvg')
 os.makedirs('./results/learning_curves')
+np.save('./results/y_test', y_test)
 
 
 def run_models(model_):
+    result = list()
+
     if model_ == 'quick_ones':
 
         # logistic regression on raw features, no penalization
@@ -177,12 +203,10 @@ def run_models(model_):
         learner.fit(X_std, y)
         y_pred = learner.predict_proba(X_test_std)[:, 1]
 
-        np.save('./results/y_test', y_test)
         np.save('./results/y_pred/1-%s' % model, y_pred)
         auc = roc_auc_score(y_test, y_pred)
         auc = max(auc, 1 - auc)
 
-        result = list()
         result.append(
             [model.replace('_', ' '), "%g" % auc, "%.3f" % (time() - start)])
         print("\n %s done, AUC: %.3f" % (model, auc))
@@ -214,12 +238,13 @@ def run_models(model_):
                 learners = [LearnerLogReg(penalty=penalty, solver='svrg',
                                           C=C_, verbose=False, step=1e-3)
                             for _ in range(K)]
-                auc = compute_score(learners, X_std, y, K, verbose=False)[0]
+                auc = compute_score(
+                    learners, X_std_cv, y_cv, K, verbose=False)[0]
 
                 avg_scores = np.append(avg_scores, max(auc, 1 - auc))
                 learner = LearnerLogReg(penalty=penalty, solver='svrg',
                                         C=C_, verbose=False, step=1e-3)
-                learner.fit(X_std, y)
+                learner.fit(X_std_cv, y_cv)
                 y_pred = learner.predict_proba(X_test_std)[:, 1]
                 score_test.append(roc_auc_score(y_test, y_pred))
 
@@ -274,16 +299,16 @@ def run_models(model_):
             stdout.flush()
 
             binarizer = FeaturesBinarizer(n_cuts=n_cuts_)
-            X_bin = binarizer.fit_transform(X)
+            X_bin = binarizer.fit_transform(X_cv)
             X_test_bin = binarizer.transform(X_test)
             learners = [
                 LearnerLogReg(C=1e10, solver='svrg', verbose=False, step=1e-3)
                 for _ in range(K)]
-            auc = compute_score(learners, X_bin, y, K, verbose=False)[0]
+            auc = compute_score(learners, X_bin, y_cv, K, verbose=False)[0]
             avg_scores = np.append(avg_scores, max(auc, 1 - auc))
             learner = LearnerLogReg(C=1e10, solver='svrg', verbose=False,
                                     step=1e-3)
-            learner.fit(X_bin, y)
+            learner.fit(X_bin, y_cv)
             y_pred = learner.predict_proba(X_test_bin)[:, 1]
             score_test.append(roc_auc_score(y_test, y_pred))
 
@@ -343,13 +368,13 @@ def run_models(model_):
                 tmp += 1
 
                 binarizer = FeaturesBinarizer(n_cuts=n_cuts_)
-                X_bin = binarizer.fit_transform(X)
+                X_bin = binarizer.fit_transform(X_cv)
                 X_test_bin = binarizer.transform(X_test)
 
                 learners = [LearnerLogReg(penalty=penalty, solver='svrg',
                                           C=C_, verbose=False, step=1e-3)
                             for _ in range(K)]
-                auc = compute_score(learners, X_bin, y, K, verbose=False)[0]
+                auc = compute_score(learners, X_bin, y_cv, K, verbose=False)[0]
                 avg_scores[i, j] = max(auc, 1 - auc)
                 learner = LearnerLogReg(penalty=penalty, solver='svrg',
                                         C=C_, verbose=False, step=1e-3)
@@ -406,14 +431,13 @@ def run_models(model_):
         tmp = 0
         for i, C_ in enumerate(reversed(C_grid)):
             for j, n_cuts_ in enumerate(n_cuts_grid):
-                
                 tmp += 1
                 print("CV %s: %d%%" % (
                     model, tmp * 100 / (C_grid_size * n_cuts_grid_size)))
                 stdout.flush()
 
                 binarizer = FeaturesBinarizer(n_cuts=n_cuts_)
-                X_bin = binarizer.fit_transform(X)
+                X_bin = binarizer.fit_transform(X_cv)
 
                 learners = [
                     LearnerLogReg(penalty='binarsity', solver='svrg', C=C_,
@@ -421,12 +445,11 @@ def run_models(model_):
                                   blocks_start=binarizer.feature_indices[:-1, ],
                                   blocks_length=binarizer.n_values)
                     for _ in range(K)]
-                auc = compute_score(learners, X_bin, y, K, verbose=False)[0]
+                auc = compute_score(learners, X_bin, y_cv, K, verbose=False)[0]
                 avg_scores[i, j] = max(auc, 1 - auc)
 
                 learner = LearnerLogReg(penalty='binarsity', solver='svrg',
-                                        C=C_,
-                                        verbose=False, step=1e-3,
+                                        C=C_, verbose=False, step=1e-3,
                                         blocks_start=binarizer.feature_indices[
                                                      :-1, ],
                                         blocks_length=binarizer.n_values)
@@ -482,35 +505,175 @@ def run_models(model_):
         np.save('./results/beta/5-%s' % model, coeffs)
 
     if model_ == 'svm_rbf':
+        # svm RBF on raw features
+        model = "svm_rbf"
 
-        svc = svm.SVC()
-        # C_range = np.logspace(-2, 10, 13)
-        # gamma_range = np.logspace(-9, 3, 13)
-        #
-        # scores = list()
-        # scores_std = list()
-        # for C in C_s:
-        #     svc.C = C
-        #     this_scores = cross_val_score(svc, X, y, n_jobs=1)
-        #     scores.append(np.mean(this_scores))
-        #     scores_std.append(np.std(this_scores))
+        n_restrict = 5000  # use only 5k examples max for Cross-Val
+        X_std_cv_ = X_std_cv[:n_restrict, :]
+        y_cv_ = y_cv[:n_restrict]
+
+        C_grid_size_ = 8
+        gamma_grid_size = 8
+        C_grid_ = np.logspace(-2, 5, C_grid_size_)
+        gamma_grid = np.logspace(-7, 1, gamma_grid_size)
+
+        param_grid = dict(gamma=gamma_grid, C=C_grid_)
+        cv = StratifiedKFold(y_cv_, n_folds=K, shuffle=True)
+        grid = GridSearchCV(SVC(probability=True), param_grid=param_grid, cv=cv,
+                            scoring="roc_auc", n_jobs=8, verbose=20)
+        grid.fit(X_std_cv_, y_cv_)
+
+        # learning curves
+        np.save('./results/learning_curves/6-%s' % model, grid.grid_scores_)
+
+        start = time()
+        learner = SVC(C=grid.best_params_['C'],
+                      gamma=grid.best_params_['gamma'], probability=True)
+        learner.fit(X_std_cv, y_cv)
+        y_pred = learner.predict_proba(X_test_std)[:, 1]
+        np.save('./results/y_pred/6-%s' % model, y_pred)
+        auc = roc_auc_score(y_test, y_pred)
+        auc = max(auc, 1 - auc)
+
+        result = [model.replace('_', ' '), "%g" % auc,
+                  "%.3f" % (time() - start)]
+        print("\n %s done, AUC: %.3f" % (model, auc))
+
+    if model_ == 'rf':
+        # random forest on raw features
+        model = "random_forest"
+
+        learner = RandomForestClassifier(n_jobs=3)
+        param_dist = {"max_depth": [None, 3, 10, 20],
+                      "min_samples_split": randint(2, X_std.shape[1]),
+                      "min_samples_leaf": randint(2, 20),
+                      "n_estimators": [100, 200, 300, 500],
+                      "bootstrap": [True, False],
+                      "criterion": ["gini", "entropy"]}
+
+        cv = StratifiedKFold(y, n_folds=K, shuffle=True)
+        n_iter_search = 30
+        search = RandomizedSearchCV(learner,
+                                    param_distributions=param_dist,
+                                    n_iter=n_iter_search, scoring="roc_auc",
+                                    verbose=10, n_jobs=10, cv=cv)
+        search.fit(X_std, y)
+        start = time()
+        learner = RandomForestClassifier(max_depth=search.best_params_[
+            'max_depth'],
+                                         min_samples_split=
+                                         search.best_params_[
+                                             'min_samples_split'],
+                                         min_samples_leaf=
+                                         search.best_params_[
+                                             'min_samples_leaf'],
+                                         bootstrap=search.best_params_[
+                                             'bootstrap'],
+                                         criterion=search.best_params_[
+                                             'criterion'],
+                                         n_estimators=search.best_params_[
+                                             'n_estimators']
+                                         )
+
+        infos = "max_depth: %s, min_samples_split: %s, min_samples_leaf: %s," \
+                " bootstrap: %s, criterion: %s, n_estimators: %s" \
+                % (search.best_params_['max_depth'],
+                   search.best_params_['min_samples_split'],
+                   search.best_params_['min_samples_leaf'],
+                   search.best_params_['bootstrap'],
+                   search.best_params_['criterion'],
+                   search.best_params_['n_estimators'])
+
+        print(infos)
+        infos_rf = open("./results/infos_rf.txt", "w")
+        infos_rf.write('%s' % infos)
+        infos_rf.close()
+
+        learner.fit(X_std, y)
+        y_pred = learner.predict_proba(X_test)[:, 1]
+        np.save('./results/y_pred/7-%s' % model, y_pred)
+        auc = roc_auc_score(y_test, y_pred)
+        auc = max(auc, 1 - auc)
+
+        result = [model.replace('_', ' '), "%g" % auc,
+                  "%.3f" % (time() - start)]
+        print("\n %s done, AUC: %.3f" % (model, auc))
+
+    if model_ == 'gb':
+        # gradient boosting on raw features
+        model = "gradient_boosting"
+
+        learner = GradientBoosting()
+        param_dist = {"max_depth": [None, 3, 10, 20],
+                      "min_samples_split": randint(2, X_std.shape[1]),
+                      "min_samples_leaf": randint(2, 20),
+                      "n_estimators": [100, 200, 300, 500]}
+
+        cv = StratifiedKFold(y, n_folds=K, shuffle=True)
+        n_iter_search = 30
+        search = RandomizedSearchCV(learner,
+                                    param_distributions=param_dist,
+                                    n_iter=n_iter_search, scoring="roc_auc",
+                                    verbose=10, n_jobs=10, cv=cv)
+        search.fit(X_std, y)
+        start = time()
+        learner = GradientBoosting(max_depth=search.best_params_['max_depth'],
+                                   min_samples_split=
+                                   search.best_params_[
+                                       'min_samples_split'],
+                                   min_samples_leaf=
+                                   search.best_params_[
+                                       'min_samples_leaf'],
+                                   n_estimators=search.best_params_[
+                                       'n_estimators']
+                                   )
+
+        infos = "max_depth: %s, min_samples_split: %s, min_samples_leaf: %s," \
+                " n_estimators: %s" \
+                % (search.best_params_['max_depth'],
+                   search.best_params_['min_samples_split'],
+                   search.best_params_['min_samples_leaf'],
+                   search.best_params_['n_estimators'])
+
+        print(infos)
+        infos_rf = open("./results/infos_gb.txt", "w")
+        infos_rf.write('%s' % infos)
+        infos_rf.close()
+
+        learner.fit(X_std, y)
+        y_pred = learner.predict_proba(X_test)[:, 1]
+        np.save('./results/y_pred/8-%s' % model, y_pred)
+        auc = roc_auc_score(y_test, y_pred)
+        auc = max(auc, 1 - auc)
+
+        result = [model.replace('_', ' '), "%g" % auc,
+                  "%.3f" % (time() - start)]
+        print("\n %s done, AUC: %.3f" % (model, auc))
 
     return result
 
 
-models = ['quick_ones', 'l1_bin', 'l2_bin', 'bina']
 t = PrettyTable(['Algos', 'AUC', 'time'])
 start_init = time()
 
-parallel = Parallel(n_jobs=4)
-result = parallel(delayed(run_models)(model_) for model_ in models)
+# models = ['quick_ones', 'l1_bin', 'l2_bin', 'bina', 'svm_rbf', 'rf', 'gb']
+# parallel = Parallel(n_jobs=len(models))
+# result = parallel(delayed(run_models)(model_) for model_ in models)
 
-for res in result:
-    if isinstance(res[0], list):
-        for val in res:
-            t.add_row(val)
-    else:
-        t.add_row(res)
+result = run_models('svm_rbf')
+t.add_row(result)
+result = run_models('rf')
+t.add_row(result)
+result = run_models('gb')
+t.add_row(result)
+
+
+# for res in result:
+#     if isinstance(res[0], list):
+#         for val in res:
+#             t.add_row(val)
+#     else:
+#         t.add_row(res)
 
 # Final performances comparison
 print("\n global time: %s s" % (time() - start_init))
