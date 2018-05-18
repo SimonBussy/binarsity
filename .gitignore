@@ -4,6 +4,3 @@
 
 *.pyc
 *__pycache__*
-
-# All datasets and results
-datasets/

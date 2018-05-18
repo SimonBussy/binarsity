@@ -1,0 +1,4 @@
+folder: result
+command: python main.py susy true 8 min all
+
+python logisticGAM.py susy true all

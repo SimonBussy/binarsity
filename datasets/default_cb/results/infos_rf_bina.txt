@@ -1,0 +1,1 @@
+max_depth: 30, min_samples_split: 6, min_samples_leaf: 11, bootstrap: False, criterion: entropy, n_estimators: 800

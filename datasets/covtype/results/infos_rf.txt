@@ -1,0 +1,1 @@
+max_depth: 50, min_samples_split: 3, min_samples_leaf: 2, bootstrap: False, criterion: gini, n_estimators: 500

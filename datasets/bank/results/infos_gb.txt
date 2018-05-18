@@ -1,0 +1,1 @@
+max_depth: 3, min_samples_split: 4, min_samples_leaf: 14, n_estimators: 300

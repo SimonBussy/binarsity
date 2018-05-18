@@ -1,0 +1,4 @@
+folder: result
+command: python main.py higgs false 8 1st
+
+python logisticGAM.py higgs false all

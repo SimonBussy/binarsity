@@ -1,0 +1,4 @@
+folder: result 
+command: python main.py ionosphere false 4 min all
+
+python logisticGAM.py ionosphere false all

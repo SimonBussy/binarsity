@@ -1,0 +1,4 @@
+folder: result
+command: python main.py bank true 8 1st all
+
+python logisticGAM.py bank true all

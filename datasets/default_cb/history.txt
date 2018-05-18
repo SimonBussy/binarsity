@@ -1,0 +1,4 @@
+folder: result
+command: python main.py default_cb true 8 1st all
+
+python logisticGAM.py default_cb true all
