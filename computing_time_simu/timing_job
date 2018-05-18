@@ -1,0 +1,31 @@
+#!/bin/bash 
+
+##PBS -q big_para
+
+#PBS -q small_para
+
+#PBS -l select=1:ncpus=100:mem=50Gb
+
+#PBS -l walltime=72:00:00
+
+#PBS -N timing
+
+#PBS -j oe -N timing_job
+
+#PBS -m e -M simon.bussy@gmail.com
+
+. /usr/share/modules/init/sh
+
+source ~/.profile
+
+export OMP_NUM_THREADS=$NCPUS
+
+cp $PBS_O_WORKDIR/timing.py .
+
+python timing.py > Job.log 2>&1
+
+cp ./computing_times.txt $PBS_O_WORKDIR/
+
+cp Job.log $PBS_O_WORKDIR
+
+exit 0
